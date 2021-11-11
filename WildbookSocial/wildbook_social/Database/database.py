@@ -186,7 +186,7 @@ class Database:
     def coordsToLocation(self, lat, long):
     
         #instantiate geocoder
-        locator = Nominatim(user_agent = "myGeocoder", timeout = 10)
+        locator = Nominatim(user_agent = "myWBGeocoder2", timeout = 10)
         rgeocode = RateLimiter(locator.reverse, min_delay_seconds = 0.001)
 
         #convert lat long to string
