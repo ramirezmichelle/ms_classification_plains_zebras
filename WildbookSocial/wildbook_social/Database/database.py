@@ -18,6 +18,7 @@ import dateutil.parser
 
 import geopy
 from geopy.geocoders import Nominatim
+# from geopy.geocoders import Photon
 from geopy.extra.rate_limiter import RateLimiter
 
 import mimetypes, urllib3
@@ -31,7 +32,7 @@ class Database:
         self.client = MongoClient(key)
         self.dbName = database
         self.db = self.client[database]
-        self.dateStr = '2016-03-01T00:00:00.00Z' #timeframe begins March 2019 #briefly changed to 2016 
+        self.dateStr = '2019-03-01T00:00:00.00Z' #timeframe begins March 2019 
         self.timeFrameStart = dateutil.parser.parse(self.dateStr)
         self.timeFrameEnd = dateutil.parser.parse('2020-03-01T00:00:00.00Z') #changed timeframe to end March 2020
         
@@ -186,30 +187,42 @@ class Database:
     def coordsToLocation(self, lat, long):
     
         #instantiate geocoder
-        locator = Nominatim(user_agent = "myWBGeocoder2", timeout = 10)
+        locator = Nominatim(user_agent = "myWBGeocoder", timeout = 10)#Nominatim(user_agent = "myGeocoder", timeout = 10)
         rgeocode = RateLimiter(locator.reverse, min_delay_seconds = 0.001)
 
         #convert lat long to string
         coords = str(lat) + "," + str(long)
 
-        #apply rgeocode function
-        location = rgeocode(coords)
-
         #get countries
         if coords == "0,0" or coords == "0.0,0.0":
             location = "N/A"
+        else:
+            #apply rgeocode function
+            try:
+                location = rgeocode(coords)
+            except:
+                location = coords
 
         return location
+    
+    def setFieldDoubleChecked(self, collection):
+        self.db[collection].update({}, {"$set": {"double_checked": False}}, upsert=False, multi=True)
+        print('Done updating {} with field double_checked=False'.format(collection))
     
     # A safety feature in case relevant prediction turns out not to be true
     # Retrieves all images in collection that were marked 'relevant' (by MS Classifier) but don't have a value assigned for 'wild'
     # Outputs image and metadata to help decide if img is truly relevant and wild
-    def doubleCheckRelevantImages(self, collection, amount):
+    def doubleCheckRelevantImages(self, collection, amount, first_round = True):
         
         initial_amount = amount
         while(amount > 0):
             print("Amount: ", amount)
-            item = self.db[collection].find_one({"$and": [{"relevant": True}, {"wild": None}]})
+            
+            if first_round == True:
+                item = self.db[collection].find_one({"$and": [{"relevant": True}, {"wild": None}]})
+            else:
+                item = self.db[collection].find_one({"$and": [{"relevant": True}, {"double_checked": False}]})
+                double_checked = False
             
             if not item:
                 break
@@ -224,6 +237,11 @@ class Database:
                 display(Image(img_url, height=500, width=500))
                 location = self.coordsToLocation(item['latitude'], item['longitude'])
                 print('ID: {}\nTitle: {}\nTags: {}\nLocation: ({},{}) --> {}\n'.format(item['_id'],item['title'], item['tags'], item['latitude'], item['longitude'], location))
+                print('Url:{}\n'.format(img_url))
+                try: 
+                    print('Confidence of Prediction: {}\n'.format(item['confidence']))
+                except KeyError:
+                    pass
                         
             else:
                 print('URL no longer valid/working ... Removing Document ... ')
@@ -236,14 +254,34 @@ class Database:
             
            
             if rel == True:
-                print("WILD (y/n):", end =" ")
-                wild = True if input() == 'y' else False 
+                wild_response = input("WILD (y-yes/u-unknown/n-no): ")
+
+                #possible values for wild classification: wild, unknown, or not wild
+                if wild_response == 'y':
+                    wild = True
+                elif wild_response == 'u':
+                    wild = 'unknown'
+                else:
+                    wild = False
             else:
                 wild = 0
+            
             print('Updating...')
-            self._updateItem(collection, item['_id'], {"relevant": rel, "wild": wild})
-
-            print("Response saved! {} and {}.\n".format("Relevant" if rel else "Not relevant", "Wild" if wild else "Not wild"))
+            if first_round == True:
+                self._updateItem(collection, item['_id'], {"relevant": rel, "wild": wild})
+            else:
+                self._updateItem(collection, item['_id'], {"relevant": rel, "wild": wild, "double_checked": True})
+                double_checked = True
+            
+            if wild == True:
+                print("Response saved! {} and {}.\n".format("Relevant", "Wild", ))
+            elif wild == 'unknown':
+                print("Response saved! {} and {}.\n".format("Relevant","unknown"))
+            else:
+                print("Response saved! {} and {}.\n".format("Relevant" if rel else "Not relevant", "Wild" if wild else "Not wild"))
+            
+            if first_round == False:
+                print('double_checked?: {}\n'.format(double_checked))
 
             amount -= 1
         
@@ -569,7 +607,7 @@ class Database:
         species_cols = {'youtube': ["humpback whales", "new whale sharks test", "iberian lynx", "Reticulated Giraffe", \
                                     "grevys zebra", "plains zebras"],
                         'flickr': ['humpback whale specific', 'whale shark specific','iberian lynx general', \
-                                  'reticulated giraffe specific', 'grevy zebra general',\
+                                  'reticulated giraffe general', 'grevy zebra general',\
                                   'plains zebra specific'],
                         'iNaturalist': ["humpback whales", "whale sharks", "iberian lynx", "reticulated giraffe",\
                                      "grevy's zebra", "plains zebra"]
